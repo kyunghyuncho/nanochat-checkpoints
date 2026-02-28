@@ -48,13 +48,16 @@ This fork is configured to launch automated hyperparameter sweeps tracking netwo
 To launch the sweep on a remote server (e.g., an 8xH100 node):
 
 ```bash
-# 1. Start a persistent tmux session so it isn't killed upon logout
+# 1. Install dependencies
+uv sync --extra gpu
+
+# 2. Start a persistent tmux session so it isn't killed upon logout
 tmux new -s sweep_session
 
-# 2. Initialize the sweep (this will print a sweep ID)
+# 3. Initialize the sweep (this will print a sweep ID)
 wandb sweep sweep.yaml
 
-# 3. Launch the agent using the Sweep ID from the previous step
+# 4. Launch the agent using the Sweep ID from the previous step
 wandb agent <USERNAME>/<PROJECT>/<SWEEP_ID>
 ```
 

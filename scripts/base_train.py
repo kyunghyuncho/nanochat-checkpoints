@@ -479,10 +479,9 @@ while True:
     is_early_save = step in early_save_steps
     is_periodic_save = args.save_every > 0 and step % args.save_every == 0
     if last_step or (step > 0 and step != args.resume_from_step and (is_early_save or is_periodic_save)):
-        checkpoint_name = f"ckpt_early_step_{step}.pt" if is_early_save and not last_step else f"{step:05d}.pt"
         save_checkpoint(
             checkpoint_dir,
-            checkpoint_name if is_early_save else step, # save_checkpoint might expect step number if we don't handle filenames, let's keep it clean
+            step, # pass step integer directly, save_checkpoint handles the '{step:06d}' formatting internally
             orig_model.state_dict(), # model parameters
             optimizer.state_dict(), # optimizer state
             { # metadata saved as json

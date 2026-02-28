@@ -25,6 +25,8 @@ parameters:
     min: 0.0001
     max: 0.01
 command:
+  - uv
+  - run
   - torchrun
   - --standalone
   - --nproc_per_node=8 # Remote H100 config; will be bypassed during local testing

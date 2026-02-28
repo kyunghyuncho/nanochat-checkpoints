@@ -54,7 +54,7 @@ def save_checkpoint(checkpoint_dir, step, model_data, optimizer_data, meta_data,
     # Note that optimizer state is sharded across ranks, so each rank must save its own.
     if optimizer_data is not None:
         os.makedirs(checkpoint_dir, exist_ok=True)
-        optimizer_path = os.path.join(checkpoint_dir, f"optim_{step:06d}_rank{rank:d}.pt")
+        optimizer_path = os.path.join(checkpoint_dir, f"optim_{step:06d}_rank{int(rank):d}.pt")
         torch.save(optimizer_data, optimizer_path)
         logger.info(f"Saved optimizer state to: {optimizer_path}")
 
@@ -65,7 +65,7 @@ def load_checkpoint(checkpoint_dir, step, device, load_optimizer=False, rank=0):
     # Load the optimizer state if requested
     optimizer_data = None
     if load_optimizer:
-        optimizer_path = os.path.join(checkpoint_dir, f"optim_{step:06d}_rank{rank:d}.pt")
+        optimizer_path = os.path.join(checkpoint_dir, f"optim_{step:06d}_rank{int(rank):d}.pt")
         optimizer_data = torch.load(optimizer_path, map_location=device)
     # Load the metadata
     meta_path = os.path.join(checkpoint_dir, f"meta_{step:06d}.json")
@@ -185,7 +185,7 @@ def load_optimizer_state(source, device, rank, model_tag=None, step=None):
     checkpoint_dir = os.path.join(checkpoints_dir, model_tag)
     if step is None:
         step = find_last_step(checkpoint_dir)
-    optimizer_path = os.path.join(checkpoint_dir, f"optim_{step:06d}_rank{rank:d}.pt")
+    optimizer_path = os.path.join(checkpoint_dir, f"optim_{step:06d}_rank{int(rank):d}.pt")
     if not os.path.exists(optimizer_path):
         log0(f"Optimizer checkpoint not found: {optimizer_path}")
         return None

@@ -1,7 +1,8 @@
-# nanochat
+# nanochat (Hyperparameter Predictability Fork)
 
 ![nanochat logo](dev/nanochat.png)
-![scaling laws](dev/scaling_laws_jan26.png)
+
+> **Notice**: This repository is a fork of `karpathy/nanochat` modified specifically for **automated W&B hyperparameter sweeps** and **early training predictability analysis**. It tracks deep network statistics (weight and gradient norms) during the initial training phase and saves early checkpoints, aimed at predicting final model capability (e.g., CORE score, val_bpb) from early training dynamics.
 
 nanochat is the simplest experimental harness for training LLMs. It is designed to run on a single GPU node, the code is minimal/hackable, and it covers all major LLM stages including tokenization, pretraining, finetuning, evaluation, inference, and a chat UI. For example, you can train your own GPT-2 capability LLM (which cost ~$43,000 to train in 2019) for only $72 (~3 hours of 8XH100 GPU node) and then talk to it in a familiar ChatGPT-like web UI. On a spot instance, the total cost can be closer to ~$20. More generally, nanochat is configured out of the box to train an entire miniseries of compute-optimal models by setting one single complexity dial: `--depth`, the number of layers in the GPT transformer model (GPT-2 capability happens to be approximately depth 26). All other hyperparameters (the width of the transformer, number of heads, learning rate adjustments, training horizons, weight decays, ...) are calculated automatically in an optimal way.
 
@@ -39,6 +40,25 @@ python -m scripts.chat_web
 ```
 
 And then visit the URL shown. Make sure to access it correctly, e.g. on Lambda use the public IP of the node you're on, followed by the port, so for example [http://209.20.xxx.xxx:8000/](http://209.20.xxx.xxx:8000/), etc. Then talk to your LLM as you'd normally talk to ChatGPT! Get it to write stories or poems. Ask it to tell you who you are to see a hallucination. Ask it why the sky is blue. Or why it's green. The speedrun is a 4e19 FLOPs capability model so it's a bit like talking to a kindergartener :).
+
+### Automated Hyperparameter Sweep (Predictability Analysis)
+
+This fork is configured to launch automated hyperparameter sweeps tracking network gradient norms and weight norms. A W&B sweep configuration exists at `sweep.yaml`. 
+
+To launch the sweep on a remote server (e.g., an 8xH100 node):
+
+```bash
+# 1. Start a persistent tmux session so it isn't killed upon logout
+tmux new -s sweep_session
+
+# 2. Initialize the sweep (this will print a sweep ID)
+wandb sweep sweep.yaml
+
+# 3. Launch the agent using the Sweep ID from the previous step
+wandb agent <USERNAME>/<PROJECT>/<SWEEP_ID>
+```
+
+Press `Ctrl+B`, then `D` to safely detach from the tmux session while it runs in the background.
 
 ---
 
@@ -126,7 +146,7 @@ I've published a number of guides that might contain helpful information, most r
 │   └── speedrun.sh                 # Train the ~$100 nanochat d20
 ├── scripts
 │   ├── base_eval.py                # Base model: CORE score, bits per byte, samples
-│   ├── base_train.py               # Base model: train
+│   ├── base_train.py               # Base model: modified for stats and W&B overrides
 │   ├── chat_cli.py                 # Chat model: talk to over CLI
 │   ├── chat_eval.py                # Chat model: eval tasks
 │   ├── chat_rl.py                  # Chat model: reinforcement learning
@@ -134,6 +154,7 @@ I've published a number of guides that might contain helpful information, most r
 │   ├── chat_web.py                 # Chat model: talk to over WebUI
 │   ├── tok_eval.py                 # Tokenizer: evaluate compression rate
 │   └── tok_train.py                # Tokenizer: train it
+├── sweep.yaml                      # W&B configuration for automated hyperparameter search
 ├── tasks
 │   ├── arc.py                      # Multiple choice science questions
 │   ├── common.py                   # TaskMixture | TaskSequence

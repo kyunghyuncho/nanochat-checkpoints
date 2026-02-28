@@ -1,0 +1,33 @@
+program: scripts.base_train # run via module with torchrun
+method: random
+metric:
+  name: val/bpb
+  goal: minimize
+parameters:
+  depth:
+    values: [8, 12, 16]
+  n_embd_override:
+    values: [256, 384, 512, 768]
+  embedding_lr_override:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.01
+  unembedding_lr_override:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.01
+  matrix_lr_override:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.01
+  scalar_lr_override:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.01
+command:
+  - torchrun
+  - --standalone
+  - --nproc_per_node=8 # Remote H100 config; will be bypassed during local testing
+  - -m
+  - ${program}
+  - ${args}

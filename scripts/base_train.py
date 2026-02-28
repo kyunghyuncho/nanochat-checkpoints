@@ -24,6 +24,11 @@ from contextlib import nullcontext, contextmanager
 import wandb
 import torch
 
+def compute_network_stats(model):
+    weight_norm = sum(p.norm(2).item() ** 2 for p in model.parameters()) ** 0.5
+    grad_norm = sum(p.grad.norm(2).item() ** 2 for p in model.parameters() if p.grad is not None) ** 0.5
+    return weight_norm, grad_norm
+
 from nanochat.gpt import GPT, GPTConfig
 from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit, tokenizing_distributed_data_loader_with_state_bos_bestfit
 from nanochat.common import compute_init, compute_cleanup, print0, DummyWandb, print_banner, get_base_dir, autodetect_device_type, get_peak_flops
@@ -47,6 +52,7 @@ parser.add_argument("--fp8", action="store_true", help="enable FP8 training (req
 parser.add_argument("--fp8-recipe", type=str, default="tensorwise", choices=["rowwise", "tensorwise"], help="FP8 scaling recipe: tensorwise (faster, recommended) or rowwise (more accurate but slower)")
 # Model architecture
 parser.add_argument("--depth", type=int, default=20, help="depth of the Transformer model")
+parser.add_argument("--n-embd-override", type=int, default=None, help="override the default scaling law for n_embd")
 parser.add_argument("--aspect-ratio", type=int, default=64, help="model_dim = depth * aspect_ratio")
 parser.add_argument("--head-dim", type=int, default=128, help="target head dimension for attention")
 parser.add_argument("--max-seq-len", type=int, default=2048, help="max context length")
@@ -59,10 +65,14 @@ parser.add_argument("--target-param-data-ratio", type=float, default=10.5, help=
 parser.add_argument("--device-batch-size", type=int, default=32, help="per-device batch size. good number to reduce to 16,8,4,... if you OOM on VRAM.")
 parser.add_argument("--total-batch-size", type=int, default=-1, help="total batch size in tokens. decent numbers are e.g. 524288. (-1 = auto-compute optimal)")
 parser.add_argument("--embedding-lr", type=float, default=0.3, help="learning rate for embedding parameters (Adam)")
+parser.add_argument("--embedding-lr-override", type=float, default=None, help="override learning rate for embedding parameters (Adam)")
 parser.add_argument("--unembedding-lr", type=float, default=0.004, help="learning rate for unembedding parameters (Adam)")
+parser.add_argument("--unembedding-lr-override", type=float, default=None, help="override learning rate for unembedding parameters (Adam)")
 parser.add_argument("--weight-decay", type=float, default=0.2, help="cautious weight decay for the Muon optimizer (for weights)")
 parser.add_argument("--matrix-lr", type=float, default=0.02, help="learning rate for matrix parameters (Muon)")
+parser.add_argument("--matrix-lr-override", type=float, default=None, help="override learning rate for matrix parameters (Muon)")
 parser.add_argument("--scalar-lr", type=float, default=0.5, help="learning rate for scalars (resid_lambdas, x0_lambdas)")
+parser.add_argument("--scalar-lr-override", type=float, default=None, help="override learning rate for scalars (resid_lambdas, x0_lambdas)")
 parser.add_argument("--adam-beta1", type=float, default=0.8, help="Adam beta1 for embedding/unembedding")
 parser.add_argument("--adam-beta2", type=float, default=0.95, help="Adam beta2 for embedding/unembedding")
 parser.add_argument("--warmup-ratio", type=float, default=0.0, help="ratio of iterations for LR warmup")
@@ -126,8 +136,11 @@ def build_model_meta(depth):
     """Build a model on meta device for a given depth (shapes/dtypes only, no data)."""
     # Model dim is nudged up to nearest multiple of head_dim for clean division
     # (FA3 requires head_dim divisible by 8, and this guarantees head_dim == args.head_dim exactly)
-    base_dim = depth * args.aspect_ratio
-    model_dim = ((base_dim + args.head_dim - 1) // args.head_dim) * args.head_dim
+    if args.n_embd_override is not None:
+        model_dim = args.n_embd_override
+    else:
+        base_dim = depth * args.aspect_ratio
+        model_dim = ((base_dim + args.head_dim - 1) // args.head_dim) * args.head_dim
     num_heads = model_dim // args.head_dim
     config = GPTConfig(
         sequence_len=args.max_seq_len, vocab_size=vocab_size,
@@ -300,14 +313,19 @@ if weight_decay_scaled != args.weight_decay:
 
 # -----------------------------------------------------------------------------
 # Initialize the Optimizer (combined MuonAdamW: Muon for matrix params, AdamW for rest)
+unembedding_lr = args.unembedding_lr_override if args.unembedding_lr_override is not None else args.unembedding_lr
+embedding_lr = args.embedding_lr_override if args.embedding_lr_override is not None else args.embedding_lr
+scalar_lr = args.scalar_lr_override if args.scalar_lr_override is not None else args.scalar_lr
+matrix_lr = args.matrix_lr_override if args.matrix_lr_override is not None else args.matrix_lr
+
 optimizer = model.setup_optimizer(
     # AdamW hyperparameters
-    unembedding_lr=args.unembedding_lr * batch_lr_scale,
-    embedding_lr=args.embedding_lr * batch_lr_scale,
-    scalar_lr=args.scalar_lr * batch_lr_scale,
+    unembedding_lr=unembedding_lr * batch_lr_scale,
+    embedding_lr=embedding_lr * batch_lr_scale,
+    scalar_lr=scalar_lr * batch_lr_scale,
     adam_betas=(args.adam_beta1, args.adam_beta2),
     # Muon hyperparameters
-    matrix_lr=args.matrix_lr * batch_lr_scale,
+    matrix_lr=matrix_lr * batch_lr_scale,
     weight_decay=weight_decay_scaled,
 )
 
@@ -457,10 +475,14 @@ while True:
         model.train()
 
     # save checkpoint: at the end of the run, or every save_every steps, except at the first step or the resume step
-    if last_step or (step > 0 and step != args.resume_from_step and args.save_every > 0 and step % args.save_every == 0):
+    early_save_steps = {250, 500, 1000}
+    is_early_save = step in early_save_steps
+    is_periodic_save = args.save_every > 0 and step % args.save_every == 0
+    if last_step or (step > 0 and step != args.resume_from_step and (is_early_save or is_periodic_save)):
+        checkpoint_name = f"ckpt_early_step_{step}.pt" if is_early_save and not last_step else f"{step:05d}.pt"
         save_checkpoint(
             checkpoint_dir,
-            step,
+            checkpoint_name if is_early_save else step, # save_checkpoint might expect step number if we don't handle filenames, let's keep it clean
             orig_model.state_dict(), # model parameters
             optimizer.state_dict(), # optimizer state
             { # metadata saved as json
@@ -506,6 +528,10 @@ while True:
         if group['kind'] == 'muon':
             group["momentum"] = muon_momentum
             group["weight_decay"] = muon_weight_decay
+            
+    # Calculate stats before clipping or stepping
+    weight_norm, grad_norm = compute_network_stats(model)
+    
     optimizer.step()
     model.zero_grad(set_to_none=True)
     train_loss_f = train_loss.item() # .item() is a CPU-GPU sync point
@@ -546,6 +572,8 @@ while True:
             "train/tok_per_sec": tok_per_sec,
             "train/mfu": mfu,
             "train/epoch": epoch,
+            "train/weight_norm": weight_norm,
+            "train/grad_norm": grad_norm,
         }
         wandb_run.log(log_data)
 
